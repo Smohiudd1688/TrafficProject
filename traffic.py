@@ -1,4 +1,6 @@
 from random import randint
+from random import choices
+import string
 from pymongo import MongoClient
 import time
 
@@ -10,8 +12,8 @@ traffic_col = db['traffic']
 # Generates a random value of either 'vehicle' or 'pedestrian' which will be added to the document when generate_traffic() is called
 def traffic_type():
     type_arr = ["Pedestrian", "Vehicle"]
-    type_num = randint(0,1)
-    ped_veh = type_arr[type_num]
+    #the choices() method allows us to add weight to each ped_veh, so we can have more vehicles passing through the intersection than pedestrians
+    ped_veh = choices(type_arr, weights = [1,7])[0]
     return ped_veh
 
 # Generates a random value of North, South, East, or West which will be added to the document when generate_traffic() is called
@@ -30,19 +32,31 @@ def traffic_direction():
 
     return {"source_dir": src_dir, "dest_dir": dest_dir}
 
+def generate_license_plate():
+    return ''.join(choices(string.ascii_uppercase + string.digits, k=6))
+    
+
 def generate_traffic():
-    counter = 0
-    while (counter < 10):
+    while True:
+        traf_type = traffic_type()
+        print(traf_type)
+        
         traffic_doc = {
-            "traffic_type": traffic_type(),
+            "traffic_type": traf_type,
             "traffic_direction": traffic_direction()
         }
-        
+
+        if traf_type == 'Vehicle':
+            license = generate_license_plate()
+            print(license)
+            traffic_doc["vehicle_license_plate"] = license
+
+
         print(traffic_doc)
-    
+
         traffic_col.insert_one(traffic_doc) 
-        time.sleep(2)
-        counter = counter + 1
+        time.sleep(1)
+        
 
 generate_traffic()
 
