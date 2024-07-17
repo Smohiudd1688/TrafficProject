@@ -31,7 +31,7 @@ def traffic_direction():
     while dest_dir == src_dir:
         dest_dir= choice(dir_arr)
 
-    return {"source_dir": src_dir, "dest_dir": dest_dir}
+    return f"{src_dir}/{dest_dir}"
 
 
 #generates speed for the vehicle, giving more weight to speeds within the speed limit of 35 mph
@@ -54,16 +54,17 @@ def generate_license_plate():
 
 
 #Sets the light cycle for the stop lights. Every 30 seconds, it switches, with the 0th index always moving to the end of the array so the loop will continue
-current_light = "ns_thru"
+current_light = "North/South_South/North"
 def stop_lights():
-    light_conditions = ["ns_thru", "ew_thru"]
+    global current_light
+    light_conditions = ["North/South_South/North", "East/West_West/East"]
     while True:
         current_light = light_conditions[0]
         print(current_light)
 
         light_conditions.append(light_conditions[0])
         light_conditions.pop(0)
-        time.sleep(20)
+        time.sleep(7)
 
     
 
@@ -72,7 +73,8 @@ def generate_traffic():
         traf_type = traffic_type()
         traffic_doc = {
             "traffic_type": traf_type,
-            "traffic_direction": traffic_direction()
+            "enter_dir/exit_dir": traffic_direction(),
+            "green_light_direction": current_light
         }
 
         #generates a license plate and vehicle speed and appends it to the document, only if it is a vehicle.
