@@ -1,8 +1,11 @@
+import json
+from bson import ObjectId
 from random import randint
 from random import choices
 from random import choice
 import string
 from pymongo import MongoClient
+from confluent_kafka import Producer
 import time
 import threading
 
@@ -12,6 +15,32 @@ db = client["traffic_test"]
 traffic_col = db["traffic"]
 queues_col = db["queues"]
 
+# Initialize Kafka producer
+producer = Producer({'bootstrap.servers': 'localhost:9092'})
+
+# Kafka topics 
+general_traffic_topic = 'traffic_crossing'
+red_light_topic = 'red_light_runners'
+
+# Function to produce Kafka message
+def produce_to_kafka(topic, message):
+    message = convert_objectid_to_string(message)
+    serialized_message = json.dumps(message).encode('utf-8')
+    producer.produce(topic, serialized_message)
+    producer.flush()
+
+def convert_objectid_to_string(message):
+    # Recursive function to convert ObjectId to string in nested dictionaries
+    if isinstance(message, dict):
+        for key, value in message.items():
+            if isinstance(value, ObjectId):
+                message[key] = str(value)
+            elif isinstance(value, (dict, list)):
+                message[key] = convert_objectid_to_string(value)
+    elif isinstance(message, list):
+        for i, item in enumerate(message):
+            message[i] = convert_objectid_to_string(item)
+    return message
 
 # Generates a random value of either 'vehicle' or 'pedestrian' which will be added to the document when generate_traffic() is called
 def traffic_type():
@@ -92,9 +121,7 @@ def stop_lights():
         light_conditions.append(light_conditions[0])
         light_conditions.pop(0)
         time.sleep(30)
-
-
-
+    
 def generate_traffic():
     global red_light_queues
     global current_light
@@ -108,27 +135,33 @@ def generate_traffic():
             "green_light_direction": current_light
         }
 
-        #generates a license plate and vehicle speed and appends it to the document, only if it is a vehicle.
+        # Generate license plate and vehicle speed if it's a vehicle
         if traf_type == "Vehicle":
             license = generate_license_plate()
             traffic_doc["vehicle_license_plate"] = license
-
             speed = traffic_speed()
             traffic_doc["speed_data"] = speed
 
-        red_light_runner = randint(1,4)
+        red_light_runner = randint(1, 4)
 
         if traf_dir in current_light:
             traffic_col.insert_one(traffic_doc)
         elif traf_dir not in current_light and red_light_runner == 1 and red_light_queues[traf_dir] == []:
             traffic_doc["alert"] = "Red light runner!"
             traffic_col.insert_one(traffic_doc)
+
+            # Produce message to Kafka for red light runners
+            produce_to_kafka(red_light_topic, traffic_doc)
+            print(f"Red light runner detected: {traffic_doc}")
         else:
             red_light_queues[traf_dir].append(traffic_doc)
             queues_col.insert_one(traffic_doc)
 
-        print(traffic_doc)
+            # Produce message to Kafka for general traffic crossing
+            produce_to_kafka(general_traffic_topic, traffic_doc)
+            print(f"General traffic crossing: {traffic_doc}")
 
+        print(traffic_doc)
         time.sleep(1)
 
 
