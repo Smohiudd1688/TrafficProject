@@ -1,26 +1,40 @@
 import json
 from bson import ObjectId
-from random import randint
-from random import choices
-from random import choice
+from random import randint, choices, choice
 import string
 from pymongo import MongoClient
-from confluent_kafka import Producer
-import time
+from confluent_kafka import Producer, Consumer, KafkaException, KafkaError
 import threading
+import time
 
-#Connecting to MongoDB Database 'traffic_test' and the 'traffic_col' collection.
+# MongoDB client and collections initialization
 client = MongoClient("mongodb://localhost:27017/")
 db = client["traffic_test"]
-traffic_col = db["traffic"]
+vehicle_traffic_col = db["vehicle_traffic"]
+pedestrian_traffic_col = db["pedestrian_traffic"]
 queues_col = db["queues"]
+red_light_runners_col = db["red_light_runners"]
+jay_walkers_col = db["jay_walkers"]
+speeding_vehicles_col = db["speeding_vehicles"]
 
-# Initialize Kafka producer
-producer = Producer({'bootstrap.servers': 'localhost:9092'})
+# Kafka configuration
+producer_conf = {'bootstrap.servers': 'localhost:9092'}
+consumer_conf = {
+    'bootstrap.servers': 'localhost:9092',
+    'group.id': 'my_consumer_group',
+    'auto.offset.reset': 'earliest'
+}
 
-# Kafka topics 
-general_traffic_topic = 'traffic_crossing'
+# Initialize Kafka producer and consumer
+producer = Producer(producer_conf)
+consumer = Consumer(consumer_conf)
+
+# Kafka topics
+vehicle_traffic_topic = 'vehicle_traffic'
+pedestrian_traffic_topic = 'pedestrian_traffic'
 red_light_topic = 'red_light_runners'
+speeding_vehicles_topic = 'speeding_vehicles'
+jay_walkers_topic = 'jay_walkers'
 
 # Function to produce Kafka message
 def produce_to_kafka(topic, message):
@@ -29,8 +43,39 @@ def produce_to_kafka(topic, message):
     producer.produce(topic, serialized_message)
     producer.flush()
 
+# Function to insert message into MongoDB
+def insert_to_mongodb(collection, message):
+    try:
+        message = convert_objectid_to_string(message)
+        collection.insert_one(message)
+        print(f"Inserted into MongoDB ({collection.name}): {message} \n \n")
+    except Exception as e:
+        print(f"Failed to insert into MongoDB ({collection.name}): {e} \n \n")
+
+# Function to consume messages from Kafka
+def consume_from_kafka():
+    try:
+        consumer.subscribe([red_light_topic])
+        while True:
+            msg = consumer.poll(timeout=1.0)
+            if msg is None:
+                continue
+            if msg.error():
+                if msg.error().code() == KafkaError._PARTITION_EOF:
+                    continue
+                else:
+                    print(msg.error())
+                    break
+            message = json.loads(msg.value().decode('utf-8'))
+            # Insert message into MongoDB
+            insert_to_mongodb(red_light_runners_col, message)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        consumer.close()
+
+# Utility function to convert ObjectId to string in nested dictionaries
 def convert_objectid_to_string(message):
-    # Recursive function to convert ObjectId to string in nested dictionaries
     if isinstance(message, dict):
         for key, value in message.items():
             if isinstance(value, ObjectId):
@@ -42,19 +87,15 @@ def convert_objectid_to_string(message):
             message[i] = convert_objectid_to_string(item)
     return message
 
-# Generates a random value of either 'vehicle' or 'pedestrian' which will be added to the document when generate_traffic() is called
+# Generates a random value of either 'vehicle' or 'pedestrian'
 def traffic_type():
     type_arr = ["Pedestrian", "Vehicle"]
-    #the choices() method allows us to add weight to each ped_veh, 
-    #so we can have more vehicles passing through the intersection than pedestrians
-    ped_veh = choices(type_arr, weights = [0.1, 0.9])[0]
+    ped_veh = choices(type_arr, weights=[0.1, 0.9])[0]
     return ped_veh
 
-
-# Generates a random value of North, South, East, or West which will be added to the document when generate_traffic() is called
+# Generates a random value of North, South, East, or West
 def traffic_direction():
     dir_arr = ["North", "South", "East", "West"]
-
     src_dir = choice(dir_arr)
    
     if src_dir == "North":
@@ -68,60 +109,63 @@ def traffic_direction():
 
     return f"{src_dir}/{dest_dir}"
 
-
-#generates speed for the vehicle, giving more weight to speeds within the speed limit of 35 mph
+# Generates speed for the vehicle
 def traffic_speed():
     thru_traf_speeds_arr = [randint(31,45), randint(46, 55)]
     vehicle_speed = choices(thru_traf_speeds_arr, weights = [0.85, 0.15])[0]
-    return {"speed_limit_mph": 35,
+    return {"speed_limit_mph": 40,
             "vehicle_speed_mph": vehicle_speed}
 
-
-#Generates a random string of numbers and capital letters for a license plate
+# Generates a random license plate
 def generate_license_plate():
     license_state_arr = ["Arizona", "California", "Nevada", "Utah", "New Mexico"]
 
     license_num = "".join(choices(string.ascii_uppercase + string.digits, k=6))
-    license_state = "".join(choices(license_state_arr, weights = [0.80, 0.09, 0.04, 0.03, 0.04]))
+    license_state = "".join(choices(license_state_arr, weights=[0.80, 0.09, 0.04, 0.03, 0.04]))
 
-    return {"license_plate_num": license_num,
-            "license_plate_state": license_state}
+    return {"license_plate_num": license_num, "license_plate_state": license_state}
 
-
-#Sets the light cycle for the stop lights. Every 30 seconds, it switches, with the 0th index always moving to the end of the array so the loop will continue
+# Sets the light cycle for the stop lights
 current_light = "North/South_South/North"
 
 red_light_queues = {
     "North/South": [],
     "South/North": [],
     "East/West": [],
-    "West/East":[]
+    "West/East": []
 }
 
-  #for loop to loop through red_light_queues. If the key is in the current_light, loop through the array in that key's value to add each vehicle to the collection. This will only dump it unless we run it in a separate thread.
+pedestrian_queues = {
+    "North/South": [],
+    "South/North": [],
+    "East/West": [],
+    "West/East": []
+}
+
+# Function to empty red light queues and insert into MongoDB
 def empty_red_light_queues():
-    for key in red_light_queues:
-            if key in current_light:
-                for element in red_light_queues[key]:
-                    element["green_light_direction"] = current_light
-                    traffic_col.insert_one(element)
-                red_light_queues[key] = []
-
-
-def stop_lights():
     global current_light
     global red_light_queues
+
+    for key in red_light_queues:
+        if key in current_light:
+            for element in red_light_queues[key]:
+                element["green_light_direction"] = current_light
+            red_light_queues[key] = []
+
+# Function to control stop lights cycle
+def stop_lights():
+    global current_light
     light_conditions = ["North/South_South/North", "East/West_West/East"]
     while True:
         current_light = light_conditions[0]
         print(current_light)
-
         empty_red_light_queues()
-
         light_conditions.append(light_conditions[0])
         light_conditions.pop(0)
         time.sleep(30)
-    
+
+# Generates traffic documents and produces to Kafka based on traffic type
 def generate_traffic():
     global red_light_queues
     global current_light
@@ -132,50 +176,69 @@ def generate_traffic():
         traffic_doc = {
             "traffic_type": traf_type,
             "enter_dir-exit_dir": traf_dir,
-            "green_light_direction": current_light
+            "green_light_direction": current_light,
+            "_id": ObjectId()
         }
-
-        # Generate license plate and vehicle speed if it's a vehicle
-        if traf_type == "Vehicle":
-            license = generate_license_plate()
-            traffic_doc["vehicle_license_plate"] = license
-            speed = traffic_speed()
-            traffic_doc["speed_data"] = speed
 
         red_light_runner = randint(1, 4)
 
-        if traf_dir in current_light:
-            traffic_col.insert_one(traffic_doc)
-        elif traf_dir not in current_light and red_light_runner == 1 and red_light_queues[traf_dir] == []:
-            traffic_doc["alert"] = "Red light runner!"
-            traffic_col.insert_one(traffic_doc)
+        if traf_type == "Vehicle":
+            license = generate_license_plate()
+            traffic_doc["vehicle_license_plate"] = license
+            vehicle_speed = traffic_speed()
+            traffic_doc["vehicle_speed_mph"] = vehicle_speed
 
-            # Produce message to Kafka for red light runners
-            produce_to_kafka(red_light_topic, traffic_doc)
-            print(f"Red light runner detected: {traffic_doc}")
-        else:
-            red_light_queues[traf_dir].append(traffic_doc)
-            queues_col.insert_one(traffic_doc)
+            #handles red light runners
+            if traf_dir not in current_light:
+                if red_light_runner == 1 and red_light_queues[traf_dir] == []:
+                    traffic_doc["alert"] = "Red light runner!"
+                    produce_to_kafka(red_light_topic, traffic_doc)
+                    insert_to_mongodb(red_light_runners_col, traffic_doc)  # Insert into red_light_runners_col 
+                    insert_to_mongodb(vehicle_traffic_col, traffic_doc) # Insert into vehicle traffic
+                    print(f"Red light runner detected: {traffic_doc} \n \n")
+                else:
+                    red_light_queues[traf_dir].append(traffic_doc)
+                    insert_to_mongodb(queues_col, traffic_doc)
+                    print(f"Queued: {traffic_doc} \n \n")
+            #As long as they are not stopped at the red light, they are entered into general vehicle traffic.
+            elif vehicle_speed["vehicle_speed_mph"] >= 51 and traf_dir in current_light:
+                speeding_amount = vehicle_speed["vehicle_speed_mph"] - 40  # Calculate speeding amount
+                traffic_doc["speeding_amount_mph"] = speeding_amount
+                traffic_doc["alert"] = f"Vehicle is speeding by {speeding_amount} mph!"
+                produce_to_kafka(speeding_vehicles_topic, traffic_doc)
+                insert_to_mongodb(speeding_vehicles_col, traffic_doc)  # Insert into speeding_vehicles_col
+                produce_to_kafka(vehicle_traffic_topic, traffic_doc)
+                insert_to_mongodb(vehicle_traffic_col, traffic_doc)
+                print(f"Speeding vehicle detected: {traffic_doc} \n \n")
+            else:
+                produce_to_kafka(vehicle_traffic_topic, traffic_doc)
+                insert_to_mongodb(vehicle_traffic_col, traffic_doc)  # Insert into vehicle_traffic_col
 
-            # Produce message to Kafka for general traffic crossing
-            produce_to_kafka(general_traffic_topic, traffic_doc)
-            print(f"General traffic crossing: {traffic_doc}")
+        else:  # Pedestrian
+            if traf_dir not in current_light and red_light_runner == 1:
+                produce_to_kafka(jay_walkers_topic, traffic_doc)
+                produce_to_kafka(pedestrian_traffic_topic, traffic_doc)
+                insert_to_mongodb(jay_walkers_col, traffic_doc)
+                insert_to_mongodb(pedestrian_traffic_col, traffic_doc)
+            elif traf_dir not in current_light and red_light_runner > 1:
+                pedestrian_queues[traf_dir].append(traf_dir)
+            else:
+                produce_to_kafka(pedestrian_traffic_topic, traffic_doc)
+                insert_to_mongodb(pedestrian_traffic_col, traffic_doc)  # Insert into pedestrian_traffic_col
 
-        print(traffic_doc)
         time.sleep(1)
 
+# Start Kafka consumer thread
+consumer_thread = threading.Thread(target=consume_from_kafka)
+consumer_thread.start()
 
-# The stop lights and the traffic need to be on two separate threads because they both operate on timers within while loops.
-# The below code will run both threads.
+# Start traffic generation and stop lights control threads
+traffic_thread = threading.Thread(target=generate_traffic)
+lights_thread = threading.Thread(target=stop_lights)
+traffic_thread.start()
+lights_thread.start()
 
-# IMPORTANT: in vsCode, `ctrl + c` won't terminate the script, so the processes must be terminated by killing the vscode terminal (click the trashcan)
-thread_one = threading.Thread(target=stop_lights)
-thread_two = threading.Thread(target=generate_traffic)
-thread_one.start()
-thread_two.start()
-
-
-# To pull up all data from collection in vsCode terminal
-# 
-# for x in traffic_col.find():
-#     print(x)
+# Join threads (optional if you want to wait for threads to finish)
+# traffic_thread.join()
+# lights_thread.join()
+# consumer_thread.join()
