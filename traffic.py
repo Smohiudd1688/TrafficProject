@@ -1,15 +1,21 @@
 import json
 from bson import ObjectId
 from random import randint, choices, choice
+from random import randint, choices, choice
 import string
 from pymongo import MongoClient
 from confluent_kafka import Producer, Consumer, KafkaException, KafkaError
+from confluent_kafka import Producer, Consumer, KafkaException, KafkaError
 import threading
+import time
 import time
 
 # MongoDB client and collections initialization
+# MongoDB client and collections initialization
 client = MongoClient("mongodb://localhost:27017/")
 db = client["traffic_test"]
+vehicle_traffic_col = db["vehicle_traffic"]
+pedestrian_traffic_col = db["pedestrian_traffic"]
 vehicle_traffic_col = db["vehicle_traffic"]
 pedestrian_traffic_col = db["pedestrian_traffic"]
 queues_col = db["queues"]
@@ -29,6 +35,9 @@ consumer_conf = {
 producer = Producer(producer_conf)
 consumer = Consumer(consumer_conf)
 
+# Kafka topics
+vehicle_traffic_topic = 'vehicle_traffic'
+pedestrian_traffic_topic = 'pedestrian_traffic'
 # Kafka topics
 vehicle_traffic_topic = 'vehicle_traffic'
 pedestrian_traffic_topic = 'pedestrian_traffic'
@@ -88,11 +97,14 @@ def convert_objectid_to_string(message):
     return message
 
 # Generates a random value of either 'vehicle' or 'pedestrian'
+# Generates a random value of either 'vehicle' or 'pedestrian'
 def traffic_type():
     type_arr = ["Pedestrian", "Vehicle"]
     ped_veh = choices(type_arr, weights=[0.1, 0.9])[0]
+    ped_veh = choices(type_arr, weights=[0.1, 0.9])[0]
     return ped_veh
 
+# Generates a random value of North, South, East, or West
 # Generates a random value of North, South, East, or West
 def traffic_direction():
     dir_arr = ["North", "South", "East", "West"]
@@ -110,28 +122,34 @@ def traffic_direction():
     return f"{src_dir}/{dest_dir}"
 
 # Generates speed for the vehicle
+# Generates speed for the vehicle
 def traffic_speed():
     thru_traf_speeds_arr = [randint(31,45), randint(46, 55)]
     vehicle_speed = choices(thru_traf_speeds_arr, weights = [0.85, 0.15])[0]
     return {"speed_limit_mph": 40,
+    return {"speed_limit_mph": 40,
             "vehicle_speed_mph": vehicle_speed}
 
+# Generates a random license plate
 # Generates a random license plate
 def generate_license_plate():
     license_state_arr = ["Arizona", "California", "Nevada", "Utah", "New Mexico"]
 
     license_num = "".join(choices(string.ascii_uppercase + string.digits, k=6))
     license_state = "".join(choices(license_state_arr, weights=[0.80, 0.09, 0.04, 0.03, 0.04]))
+    license_state = "".join(choices(license_state_arr, weights=[0.80, 0.09, 0.04, 0.03, 0.04]))
 
+    return {"license_plate_num": license_num, "license_plate_state": license_state}
     return {"license_plate_num": license_num, "license_plate_state": license_state}
 
 # Sets the light cycle for the stop lights
+# Sets the light cycle for the stop lights
 current_light = "North/South_South/North"
-
 red_light_queues = {
     "North/South": [],
     "South/North": [],
     "East/West": [],
+    "West/East": []
     "West/East": []
 }
 
@@ -228,6 +246,20 @@ def generate_traffic():
 
         time.sleep(1)
 
+# Start Kafka consumer thread
+consumer_thread = threading.Thread(target=consume_from_kafka)
+consumer_thread.start()
+
+# Start traffic generation and stop lights control threads
+traffic_thread = threading.Thread(target=generate_traffic)
+lights_thread = threading.Thread(target=stop_lights)
+traffic_thread.start()
+lights_thread.start()
+
+# Join threads (optional if you want to wait for threads to finish)
+# traffic_thread.join()
+# lights_thread.join()
+# consumer_thread.join()
 # Start Kafka consumer thread
 consumer_thread = threading.Thread(target=consume_from_kafka)
 consumer_thread.start()
