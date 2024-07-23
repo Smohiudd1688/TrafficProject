@@ -1,11 +1,13 @@
 import json
 from bson import ObjectId
-from random import randint, choices, choice
-import string
-from pymongo import MongoClient
-from confluent_kafka import Producer, Consumer, KafkaException, KafkaError
+from random import randint
 import threading
 import time
+
+from pymongo import MongoClient
+from confluent_kafka import Producer, Consumer, KafkaException, KafkaError
+
+from traf_utils import traffic_type, traffic_direction, traffic_speed, generate_license_plate
 
 # MongoDB client and collections initialization
 """
@@ -110,80 +112,6 @@ def convert_objectid_to_string(message):
 
 
 """
-----------
-Starting here, the rest of the script is handling the simulation of traffic. 
-Many components of each instance of traffic are auto-generated, often giving 
-weights to various components that will be explained more in the description
-of each function.
-----------
-"""
-
-
-# Generates a random value of either 'vehicle' or 'pedestrian'
-"""
-This function will decide if each instance of traffic is a vehicle or a pedestrian.
-It uses the the choices() method from the random module to pseudo-randomly pick a value from 
-the array with two elements, either Pedestrian, or Vehicle. the choices() method allows us to add a weight 
-to the generation, so we have opted to have about 90% of traffic be vehicles and 10% being pedestrians.
-Because the choices() method returns an array, we take the 0th index from that array and assign it to the ped_veh variable.
-"""
-def traffic_type():
-    type_arr = ["Pedestrian", "Vehicle"]
-    ped_veh = choices(type_arr, weights=[0.1, 0.9])[0]
-    return ped_veh
-
-# Generates a random value of North, South, East, or West
-"""
-In this traffic simulator, there are no turns allowed at this intersection. As such, all traffic is through-traffic.
-Using the choice() method from the random module, a source direction is generated. This indicates the side of the intersection
-that the instance of traffic enters from. In it's current iteration (only allowing through-traffic) the destination direction 
-is just set to the opposite of the source direction. However, if turns were allowed, then the destination direction
-would also include a random choice() as long as it doesn't equal the source direction.
-"""
-def traffic_direction():
-    dir_arr = ["North", "South", "East", "West"]
-    src_dir = choice(dir_arr)
-   
-    if src_dir == "North":
-        dest_dir = "South"
-    elif src_dir == "South":
-        dest_dir = "North"
-    elif src_dir == "East":
-        dest_dir = "West"
-    else:
-        dest_dir = "East"
-
-    return f"{src_dir}/{dest_dir}"
-
-# Generates speed for the vehicle
-"""
-This function uses the randint() method from the random module to pseudo-randomly generate
-two values: a law-abiding speed, and a law-breaking speed. The speed limit at this intersection is 40 mph.
-So law abiding speeds can be up to 50 mph before a speeding ticket would be issued. Once those values are set,
-we use the choice() method again to randomly choose one of those two values to apply to the vehicle traffic. The choices()
-method gives more weight to law-abiding speeds, so we only expect about 15% of traffic to be speeding.
-"""
-def traffic_speed():
-    thru_traf_speeds_arr = [randint(37,50), randint(51, 60)]
-    vehicle_speed = choices(thru_traf_speeds_arr, weights = [0.85, 0.15])[0]
-    return {"speed_limit_mph": 40,
-            "vehicle_speed_mph": vehicle_speed}
-
-# Generates a random license plate
-"""
-Randomly generates a 6-character string of alphanumeric characters to be the license plate number, returned as an array, which
-is then joined into a string.
-Then the choices() method chooses a State for the license plate to be issued from, with most traffic being from Arizona. 
-"""
-def generate_license_plate():
-    license_state_arr = ["Arizona", "California", "Nevada", "Utah", "New Mexico"]
-
-    license_num = "".join(choices(string.ascii_uppercase + string.digits, k=6))
-    license_state = "".join(choices(license_state_arr, weights=[0.80, 0.09, 0.04, 0.03, 0.04]))
-
-    return {"license_plate_num": license_num, "license_plate_state": license_state}
-
-"""
 A few global variables. The first is which direction is currently given the green light at the intersection.
 This is updated with the stop_lights() function below, but it is global so it can be read by the separate generate_traffic() thread to determine
 if they pass through the intersection or if they are added to a red_light_queue
@@ -272,7 +200,9 @@ def generate_traffic():
             license = generate_license_plate()
             traffic_doc["vehicle_license_plate"] = license
             vehicle_speed = traffic_speed()
-            traffic_doc["vehicle_speed_mph"] = vehicle_speed
+            traffic_doc["speed_data"] = vehicle_speed
+            if traffic_doc["speed_data"]["speeding_amount_mph"] > 10:
+                traffic_doc["speed_alert"] = f"Vehicle is speeding by {traffic_doc["speed_data"]["speeding_amount_mph"]} miles per hour."
 
             #handles red light runners.
             #If the red_light_runner value is a 1, and the red_light_queue for that vehicle's direction is empty,
@@ -280,7 +210,7 @@ def generate_traffic():
             #collection exclusively tracking red light runners. An alert is added to their document.
             if traf_dir not in current_light:
                 if red_light_runner == 1 and red_light_queues[traf_dir] == []:
-                    traffic_doc["alert"] = "Red light runner!"
+                    traffic_doc["red_alert"] = "Red light runner!"
                     produce_to_kafka(red_light_topic, traffic_doc)
                     insert_to_mongodb(red_light_runners_col, traffic_doc)
                     insert_to_mongodb(vehicle_traffic_col, traffic_doc)
@@ -296,9 +226,6 @@ def generate_traffic():
             #to determine if they should be ticketed. Speeders are added to their own kafka-topic/mongo-collection as well as that of
             #general traffic
             elif vehicle_speed["vehicle_speed_mph"] >= 51 and traf_dir in current_light:
-                speeding_amount = vehicle_speed["vehicle_speed_mph"] - 40
-                traffic_doc["speeding_amount_mph"] = speeding_amount
-                traffic_doc["alert"] = f"Vehicle is speeding by {speeding_amount} mph!"
                 produce_to_kafka(speeding_vehicles_topic, traffic_doc)
                 insert_to_mongodb(speeding_vehicles_col, traffic_doc)
                 produce_to_kafka(vehicle_traffic_topic, traffic_doc)
