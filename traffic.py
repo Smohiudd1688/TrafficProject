@@ -78,7 +78,7 @@ def insert_to_mongodb(collection, message):
 # Function to consume messages from Kafka
 def consume_from_kafka():
     try:
-        consumer.subscribe([red_light_topic])
+        consumer.subscribe([vehicle_traffic_topic, pedestrian_traffic_topic, red_light_topic, speeding_vehicles_topic, jay_walkers_topic])
         while True:
             msg = consumer.poll(timeout=1.0)
             if msg is None:
@@ -90,8 +90,19 @@ def consume_from_kafka():
                     print(msg.error())
                     break
             message = json.loads(msg.value().decode('utf-8'))
+            topic = msg.topic()
+
             # Insert message into MongoDB
-            insert_to_mongodb(red_light_runners_col, message)
+            if topic == vehicle_traffic_topic:
+                insert_to_mongodb(vehicle_traffic_col, message)
+            elif topic == pedestrian_traffic_topic:
+                insert_to_mongodb(pedestrian_traffic_col, message)
+            elif topic == red_light_topic:
+                insert_to_mongodb(red_light_runners_col, message)
+            elif topic == speeding_vehicles_topic:
+                insert_to_mongodb(speeding_vehicles_col, message)
+            elif topic == jay_walkers_topic:
+                insert_to_mongodb(jay_walkers_col, message)
     except KeyboardInterrupt:
         pass
     finally:
@@ -151,7 +162,6 @@ def empty_red_light_queues():
                 element["green_light_direction"] = current_light
                 element["stopped_at_red_light"] = True
                 produce_to_kafka(vehicle_traffic_topic, element)
-                insert_to_mongodb(vehicle_traffic_col, element)
             red_light_queues[key] = []
 
 # Function to control stop lights cycle
@@ -211,14 +221,12 @@ def generate_traffic():
                 if red_light_runner == 1 and red_light_queues[traf_dir] == []:
                     traffic_doc["red_alert"] = "Red light runner!"
                     produce_to_kafka(red_light_topic, traffic_doc)
-                    insert_to_mongodb(red_light_runners_col, traffic_doc)
-                    insert_to_mongodb(vehicle_traffic_col, traffic_doc)
+                    produce_to_kafka(vehicle_traffic_topic, traffic_doc)
                     print(f"Red light runner detected: {traffic_doc} \n \n")
 
                 #If they are not a red light runner, but they still don't have the green light, they will be added to the queue.
                 else:
                     red_light_queues[traf_dir].append(traffic_doc)
-                    insert_to_mongodb(queues_col, traffic_doc)
                     print(f"Queued: {traffic_doc} \n \n")
 
             #If they are not stopped at the red light, their speed is evaluated and compared to the speed limit
@@ -226,13 +234,10 @@ def generate_traffic():
             #general traffic
             elif vehicle_speed["vehicle_speed_mph"] >= 51 and traf_dir in current_light:
                 produce_to_kafka(speeding_vehicles_topic, traffic_doc)
-                insert_to_mongodb(speeding_vehicles_col, traffic_doc)
                 produce_to_kafka(vehicle_traffic_topic, traffic_doc)
-                insert_to_mongodb(vehicle_traffic_col, traffic_doc)
                 print(f"Speeding vehicle detected: {traffic_doc} \n \n")
             else:
                 produce_to_kafka(vehicle_traffic_topic, traffic_doc)
-                insert_to_mongodb(vehicle_traffic_col, traffic_doc)
 
         #If the instance of traffic is pedestrian, jay-walkers are the equivilent of red-light runners.
         #Speed is not tracked for pedestrians, and pedestrians can jay-walk even if there is a queue in front of them.
@@ -241,15 +246,12 @@ def generate_traffic():
                 traffic_doc["jay_walker_alert"] = "Jay-walker detected!"
                 produce_to_kafka(jay_walkers_topic, traffic_doc)
                 produce_to_kafka(pedestrian_traffic_topic, traffic_doc)
-                insert_to_mongodb(jay_walkers_col, traffic_doc)
-                insert_to_mongodb(pedestrian_traffic_col, traffic_doc)
                 
                 print("Jay-walker detected")
             elif traf_dir not in current_light and red_light_runner > 1:
                 pedestrian_queues[traf_dir].append(traf_dir)
             else:
-                produce_to_kafka(pedestrian_traffic_topic, traffic_doc)
-                insert_to_mongodb(pedestrian_traffic_col, traffic_doc)  
+                produce_to_kafka(pedestrian_traffic_topic, traffic_doc)  
         time.sleep(1)
 
 # Start Kafka consumer thread
