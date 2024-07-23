@@ -238,18 +238,18 @@ def generate_traffic():
         #Speed is not tracked for pedestrians, and pedestrians can jay-walk even if there is a queue in front of them.
         else:
             if traf_dir not in current_light and red_light_runner == 1:
+                traffic_doc["jay_walker_alert"] = "Jay-walker detected!"
                 produce_to_kafka(jay_walkers_topic, traffic_doc)
                 produce_to_kafka(pedestrian_traffic_topic, traffic_doc)
                 insert_to_mongodb(jay_walkers_col, traffic_doc)
                 insert_to_mongodb(pedestrian_traffic_col, traffic_doc)
-                traffic_doc["alert"] = "Jay-walker detected!"
+                
                 print("Jay-walker detected")
             elif traf_dir not in current_light and red_light_runner > 1:
                 pedestrian_queues[traf_dir].append(traf_dir)
             else:
                 produce_to_kafka(pedestrian_traffic_topic, traffic_doc)
-                insert_to_mongodb(pedestrian_traffic_col, traffic_doc)  # Insert into pedestrian_traffic_col
-
+                insert_to_mongodb(pedestrian_traffic_col, traffic_doc)  
         time.sleep(1)
 
 # Start Kafka consumer thread
