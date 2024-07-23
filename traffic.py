@@ -139,11 +139,8 @@ pedestrian_queues = {
 # Function to empty red light queues and insert into MongoDB
 """
 A function that is called within the stop_lights() while loop. When the green light changes directions,
-This will take the queues for traffic that has been stopped at the red light and adds it to traffic
+This will take the queues for traffic that has been stopped at the red light and adds it to traffic_topic/collection. It also taggs the traffic with "stopped_at_red_light: True" to indicate that it was stopped. 
 """
-######################
-#THIS NEEDS TO BE UPDATED TO ADD THE TRAFFIC SINCE KAFKA WAS INTRODUCED
-######################
 def empty_red_light_queues():
     global current_light
     global red_light_queues
@@ -152,6 +149,9 @@ def empty_red_light_queues():
         if key in current_light:
             for element in red_light_queues[key]:
                 element["green_light_direction"] = current_light
+                element["stopped_at_red_light"] = True
+                produce_to_kafka(vehicle_traffic_topic, element)
+                insert_to_mongodb(vehicle_traffic_col, element)
             red_light_queues[key] = []
 
 # Function to control stop lights cycle
@@ -179,7 +179,6 @@ def generate_traffic():
     """
     A while loop that generates traffic every 1 second.
     """
-    
     while True:
         traf_type = traffic_type()
         traf_dir = traffic_direction()
