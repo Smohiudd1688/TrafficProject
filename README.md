@@ -42,10 +42,13 @@ First, run the docker-compose.yml file from your terminal while in the appropria
 Access Grafana by navigating to 'http://localhost:3001'  
 Log in using credentials('admin'/'password')  
 Configure the connection to MySQL database:  
- Host:' mysql:3306'  
+ Host: 'mysql:3306'  
  Database: 'traffic_data'  
  User: 'user'  
  Password: 'pass'
+
+Prometheus:  
+ Host: 'http://prometheus:9090'
 
 ## Credits
 
