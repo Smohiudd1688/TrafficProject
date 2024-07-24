@@ -4,13 +4,13 @@ from pymongo import MongoClient
 # MongoDB Connection
 mongo_client = MongoClient("mongodb://localhost:27017/")
 mongo_db = mongo_client["traffic_test"]
-mongo_collection = mongo_db["traffic"]
+mongo_collection = mongo_db["vehicle_traffic"]
 
 # MySQL Connection
 mysql_conn = mysql.connector.connect(
     host="localhost",
-    user="user",  
-    password="pass",  
+    user="root",  
+    password="password",  
     database="traffic_data"  # The database created in MySQL Workbench
 )
 mysql_cursor = mysql_conn.cursor()

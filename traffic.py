@@ -3,6 +3,7 @@ from bson import ObjectId
 from random import randint
 import threading
 import time
+from datetime import datetime
 
 from pymongo import MongoClient
 from confluent_kafka import Producer, Consumer, KafkaException, KafkaError
@@ -161,6 +162,7 @@ def empty_red_light_queues():
             for element in red_light_queues[key]:
                 element["green_light_direction"] = current_light
                 element["stopped_at_red_light"] = True
+                element["time_stamp"] = str(datetime.now())
                 produce_to_kafka(vehicle_traffic_topic, element)
             red_light_queues[key] = []
 
@@ -194,11 +196,13 @@ def generate_traffic():
         traf_dir = traffic_direction()
 
         #All traffic will have a type, a direction that it enters and exits from, the current green light, and a mongo _id
+        now = datetime.now()
         traffic_doc = {
             "traffic_type": traf_type,
             "enter_dir-exit_dir": traf_dir,
             "green_light_direction": current_light,
-            "_id": ObjectId()
+            "_id": ObjectId(),
+            "time_stamp": str(now)
         }
 
         # This randomly generates the possibility for an instance of traffic (vehicle or ped) to run a red light.
