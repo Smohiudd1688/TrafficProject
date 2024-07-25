@@ -13,11 +13,11 @@ from traf_utils import traffic_type, traffic_direction, traffic_speed, generate_
 # MongoDB client and collections initialization
 """
 Setting up the MongoDB client through Pymongo, connecting to local host port 27017.
-Below the connection to the traffic_test database, each collection is established.
+Below the connection to the traffic_data database, each collection is established.
 """
 
 client = MongoClient("mongodb://localhost:27017/")
-db = client["traffic_test"]
+db = client["traffic_data"]
 
 vehicle_traffic_col = db["vehicle_traffic"]
 pedestrian_traffic_col = db["pedestrian_traffic"]
