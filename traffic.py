@@ -21,8 +21,6 @@ db = client["traffic_test"]
 
 vehicle_traffic_col = db["vehicle_traffic"]
 pedestrian_traffic_col = db["pedestrian_traffic"]
-vehicle_traffic_col = db["vehicle_traffic"]
-pedestrian_traffic_col = db["pedestrian_traffic"]
 queues_col = db["queues"]
 red_light_runners_col = db["red_light_runners"]
 jay_walkers_col = db["jay_walkers"]
@@ -150,21 +148,67 @@ pedestrian_queues = {
 
 # Function to empty red light queues and insert into MongoDB
 """
-A function that is called within the stop_lights() while loop. When the green light changes directions,
-This will take the queues for traffic that has been stopped at the red light and adds it to traffic_topic/collection. It also taggs the traffic with "stopped_at_red_light: True" to indicate that it was stopped. 
+These functions are called within the stop_lights() while loop. When the green light changes directions,
+This will take the queues for traffic that has been stopped at the red light and adds it to traffic_topic/collection. 
+It also taggs the traffic with "queued_before_crossing: True" to indicate that it was stopped.
+Pedestrian traffic empties all at once since pedestrians can cross a crosswalk at once, whereas vehicle empty each queue one car at a 
+time with 1 second in between each. 
+
+There are two functions here because they need to operate on two separate threads. South/North queued traffic cannot 
+wait until North/South queued traffic empties before emptying itself, thus the two threads. One thread handles North/South and East/West queued
+traffic, whereas the other thread handles South/North and West/East traffic
 """
-def empty_red_light_queues():
+def empty_red_light_queues1():
     global current_light
     global red_light_queues
 
+    for key in pedestrian_queues:
+        if key in current_light and key == "North/South" or key == "East/West":
+            for element in pedestrian_queues[key]:
+                element ["green_light_direction"] = current_light
+                element ["queued_before_crossing"] = True
+                element ["time_stamp"] = str(datetime.now())
+                produce_to_kafka(pedestrian_traffic_topic, element)
+            pedestrian_queues[key] = []
+            break
+
+
     for key in red_light_queues:
-        if key in current_light:
+        if key in current_light and key == "North/South" or key == "East/West":
             for element in red_light_queues[key]:
                 element["green_light_direction"] = current_light
-                element["stopped_at_red_light"] = True
+                element["queued_before_crossing"] = True
                 element["time_stamp"] = str(datetime.now())
                 produce_to_kafka(vehicle_traffic_topic, element)
+                time.sleep(1)
             red_light_queues[key] = []
+            break
+    
+
+def empty_red_light_queues2():
+    global current_light
+    global red_light_queues
+
+    for key in pedestrian_queues:
+        if key in current_light and key == "South/North" or key == "West/East":
+            for element in pedestrian_queues[key]:
+                element ["green_light_direction"] = current_light
+                element ["queued_before_crossing"] = True
+                element ["time_stamp"] = str(datetime.now())
+                produce_to_kafka(pedestrian_traffic_topic, element)
+            pedestrian_queues[key] = []
+            break
+
+    for key in red_light_queues:
+        if key in current_light and key == "South/North" or key == "West/East":
+            for element in red_light_queues[key]:
+                element["green_light_direction"] = current_light
+                element["queued_before_crossing"] = True
+                element["time_stamp"] = str(datetime.now())
+                produce_to_kafka(vehicle_traffic_topic, element)
+                time.sleep(1)
+            red_light_queues[key] = []
+            break
 
 # Function to control stop lights cycle
 """
@@ -178,7 +222,12 @@ def stop_lights():
     while True:
         current_light = light_conditions[0]
         print(current_light)
-        empty_red_light_queues()
+
+        queue_thread_NS_EW = threading.Thread(target=empty_red_light_queues1)
+        queue_thread_SN_WE = threading.Thread(target= empty_red_light_queues2)
+        queue_thread_NS_EW.start()
+        queue_thread_SN_WE.start()
+
         light_conditions.append(light_conditions[0])
         light_conditions.pop(0)
         time.sleep(30)
@@ -192,6 +241,7 @@ def generate_traffic():
     A while loop that generates traffic every 1 second.
     """
     while True:
+        time.sleep(1)
         traf_type = traffic_type()
         traf_dir = traffic_direction()
 
@@ -227,6 +277,8 @@ def generate_traffic():
                     produce_to_kafka(red_light_topic, traffic_doc)
                     produce_to_kafka(vehicle_traffic_topic, traffic_doc)
                     print(f"Red light runner detected: {traffic_doc} \n \n")
+                    if traffic_doc["speed_data"]["speeding_amount_mph"] > 10:
+                        produce_to_kafka(speeding_vehicles_topic, traffic_doc)
 
                 #If they are not a red light runner, but they still don't have the green light, they will be added to the queue.
                 else:
@@ -236,12 +288,13 @@ def generate_traffic():
             #If they are not stopped at the red light, their speed is evaluated and compared to the speed limit
             #to determine if they should be ticketed. Speeders are added to their own kafka-topic/mongo-collection as well as that of
             #general traffic
-            elif vehicle_speed["vehicle_speed_mph"] >= 51 and traf_dir in current_light:
-                produce_to_kafka(speeding_vehicles_topic, traffic_doc)
-                produce_to_kafka(vehicle_traffic_topic, traffic_doc)
-                print(f"Speeding vehicle detected: {traffic_doc} \n \n")
             else:
-                produce_to_kafka(vehicle_traffic_topic, traffic_doc)
+                if red_light_queues[traf_dir] != []:
+                    red_light_queues[traf_dir].append(traffic_doc)
+                else:
+                    if vehicle_speed["vehicle_speed_mph"] >= 51:
+                        produce_to_kafka(speeding_vehicles_topic, traffic_doc)
+                    produce_to_kafka(vehicle_traffic_topic, traffic_doc)
 
         #If the instance of traffic is pedestrian, jay-walkers are the equivilent of red-light runners.
         #Speed is not tracked for pedestrians, and pedestrians can jay-walk even if there is a queue in front of them.
@@ -253,10 +306,9 @@ def generate_traffic():
                 
                 print("Jay-walker detected")
             elif traf_dir not in current_light and red_light_runner > 1:
-                pedestrian_queues[traf_dir].append(traf_dir)
+                pedestrian_queues[traf_dir].append(traffic_doc)
             else:
-                produce_to_kafka(pedestrian_traffic_topic, traffic_doc)  
-        time.sleep(1)
+                produce_to_kafka(pedestrian_traffic_topic, traffic_doc)
 
 # Start Kafka consumer thread
 consumer_thread = threading.Thread(target=consume_from_kafka)
